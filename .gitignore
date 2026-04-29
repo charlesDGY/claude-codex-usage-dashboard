@@ -1,0 +1,19 @@
+# Dashboard runtime artifacts
+dashboard.log
+dashboard.pid
+*.log
+*.pid
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Editor
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Local overrides — don't commit user-specific pricing
+codex_pricing.local.json

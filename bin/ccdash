@@ -1,0 +1,105 @@
+#!/usr/bin/env bash
+# Lightweight launcher for the local Claude Code usage dashboard.
+# Usage: ccdash {start|stop|restart|status|log|tail}
+
+set -uo pipefail
+HERE="$(dirname "$(readlink -f "$0")")"
+PY=/usr/bin/python3
+SCRIPT="$HERE/../cc_dashboard.py"
+LOG="${CC_DASHBOARD_LOG:-$HERE/../dashboard.log}"
+PIDFILE="${CC_DASHBOARD_PID:-$HERE/../dashboard.pid}"
+export CC_DASHBOARD_PORT="${CC_DASHBOARD_PORT:-36668}"
+PORT="$CC_DASHBOARD_PORT"
+
+is_running() {
+    [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null
+}
+
+cmd_start() {
+    if is_running; then
+        echo "already running pid=$(cat "$PIDFILE")"
+        return 0
+    fi
+    nohup "$PY" -u "$SCRIPT" > "$LOG" 2>&1 < /dev/null &
+    echo "$!" > "$PIDFILE"
+    disown 2>/dev/null || true
+    sleep 2
+    if is_running; then
+        echo "started pid=$(cat "$PIDFILE")"
+        # show LAN IP for browser access
+        IPS=$(hostname -I | tr ' ' '\n' | grep -v '^$' | head -3 | tr '\n' ',' | sed 's/,$//')
+                echo "URL: http://localhost:$PORT/"
+        for ip in $(hostname -I 2>/dev/null); do
+            [ -n "$ip" ] && echo "LAN: http://${ip}:$PORT/"
+        done
+    else
+        echo "FAILED — check $LOG"
+        tail -10 "$LOG"
+        return 1
+    fi
+}
+
+cmd_stop() {
+    if ! is_running; then
+        echo "not running"
+        rm -f "$PIDFILE"
+        return 0
+    fi
+    PID=$(cat "$PIDFILE")
+    kill -TERM "$PID" 2>/dev/null
+    for i in 1 2 3 4 5; do
+        sleep 1
+        kill -0 "$PID" 2>/dev/null || break
+    done
+    kill -0 "$PID" 2>/dev/null && kill -KILL "$PID" 2>/dev/null
+    rm -f "$PIDFILE"
+    echo "stopped"
+}
+
+cmd_status() {
+    if is_running; then
+        PID=$(cat "$PIDFILE")
+        IPS=$(hostname -I | tr ' ' '\n' | grep -v '^$' | head -3 | tr '\n' ',' | sed 's/,$//')
+        echo "running pid=$PID port=$PORT"
+        echo "URL: http://localhost:$PORT/"
+        for ip in $(hostname -I 2>/dev/null); do
+            [ -n "$ip" ] && echo "LAN: http://${ip}:$PORT/"
+        done
+        # uptime + last refresh
+        START_T=$(stat -c %Y /proc/$PID 2>/dev/null)
+        if [ -n "$START_T" ]; then
+            UP=$(( $(date +%s) - START_T ))
+            echo "uptime: $((UP/3600))h $((UP%3600/60))m"
+        fi
+        echo ""
+        curl -s -m 3 "http://localhost:$PORT/api/data" 2>/dev/null | python3 -c "
+import json, sys
+try:
+    d = json.load(sys.stdin)
+    print('last refresh:', d.get('last_refresh_status'), 'errors:', d.get('errors') or '(none)')
+    b = (d.get('blocks') or {}).get('blocks') or []
+    if b:
+        bb = b[0]
+        proj = (bb.get('projection') or {})
+        print(f'block: \${bb.get(\"costUSD\",0):.2f} / proj \${proj.get(\"totalCost\",0):.2f} / \${(bb.get(\"burnRate\") or {}).get(\"costPerHour\",0):.2f}/hr')
+except: pass
+" 2>/dev/null
+    else
+        echo "not running"
+    fi
+}
+
+cmd_log() { cat "$LOG"; }
+cmd_tail() { tail -f "$LOG"; }
+
+cmd_restart() { cmd_stop; sleep 1; cmd_start; }
+
+case "${1:-status}" in
+    start) cmd_start ;;
+    stop) cmd_stop ;;
+    restart) cmd_restart ;;
+    status|"") cmd_status ;;
+    log) cmd_log ;;
+    tail) cmd_tail ;;
+    *) echo "usage: ccdash {start|stop|restart|status|log|tail}"; exit 1 ;;
+esac
