@@ -1,4 +1,4 @@
-# cc-usage-dashboard
+# claude-codex-usage-dashboard
 
 **Language**: [中文](README.zh-CN.md) · English
 
@@ -71,7 +71,7 @@ stdlib-only Python (with the exception of `npx` to fetch ccusage for Claude pric
 ## Quick start
 
 ```bash
-git clone https://github.com/charlesDGY/cc-usage-dashboard.git ~/.cache/cc-dashboard
+git clone https://github.com/charlesDGY/claude-codex-usage-dashboard.git ~/.cache/cc-dashboard
 cd ~/.cache/cc-dashboard
 
 # Start (default port 36668, binds 0.0.0.0 for LAN access)
@@ -177,7 +177,7 @@ echo 'hi' | codex exec --skip-git-repo-check
 ### Step 4: clone + start
 
 ```bash
-git clone https://github.com/charlesDGY/cc-usage-dashboard.git ~/.cache/cc-dashboard
+git clone https://github.com/charlesDGY/claude-codex-usage-dashboard.git ~/.cache/cc-dashboard
 cd ~/.cache/cc-dashboard
 ./bin/ccdash start
 ```

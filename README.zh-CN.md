@@ -1,4 +1,4 @@
-# cc-usage-dashboard
+# claude-codex-usage-dashboard
 
 **Language**: 中文 · [English](README.md)
 
@@ -71,7 +71,7 @@ stdlib-only Python（除了 npx 依赖 ccusage 拉 Claude 价格）。
 ## 快速开始
 
 ```bash
-git clone https://github.com/charlesDGY/cc-usage-dashboard.git ~/.cache/cc-dashboard
+git clone https://github.com/charlesDGY/claude-codex-usage-dashboard.git ~/.cache/cc-dashboard
 cd ~/.cache/cc-dashboard
 
 # 启动（默认端口 36668，绑 0.0.0.0 局域网可达）
@@ -176,7 +176,7 @@ echo 'hi' | codex exec --skip-git-repo-check
 ### Step 4：克隆 + 启动
 
 ```bash
-git clone https://github.com/charlesDGY/cc-usage-dashboard.git ~/.cache/cc-dashboard
+git clone https://github.com/charlesDGY/claude-codex-usage-dashboard.git ~/.cache/cc-dashboard
 cd ~/.cache/cc-dashboard
 ./bin/ccdash start
 ```
