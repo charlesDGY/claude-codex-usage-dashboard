@@ -950,6 +950,13 @@ const fmt = (n) => {
 };
 const fmtUSD = (n) => n != null ? '$' + Number(n).toFixed(2) : '-';
 const fmtPct = (n) => n != null ? Number(n).toFixed(1) + '%' : '-';
+// Defensive percent formatter (0dp). Returns '?' when value is missing/non-finite.
+// Upstream may send null (e.g. Codex rate_limits.primary on the premium plan,
+// or anthropic.seven_day when the API hasn't populated it yet).
+const fmtPct0 = (n) => (n == null || !Number.isFinite(Number(n))) ? '?' : Number(n).toFixed(0) + '%';
+const fmtPct1 = (n) => (n == null || !Number.isFinite(Number(n))) ? '?' : Number(n).toFixed(1) + '%';
+// Tag color for utilization percentage; '⚪' when no data so the line still renders.
+const tagPct = (n) => n == null ? '⚪' : (n < 50 ? '🟢' : n < 80 ? '🟡' : '🔴');
 
 function bartrack(pct) {
   const w = Math.max(0, Math.min(100, pct));
@@ -995,24 +1002,33 @@ function renderInsights(d) {
   // Codex insight
   const codex = d.codex || {};
   if (codex.rate_limits) {
+    // primary/secondary may be null on plans without enforced rate limits (e.g. premium).
+    // Fall back to {} for safe field access; render '?' instead of crashing on toFixed.
     const p5h = codex.rate_limits.primary || {};
     const p7d = codex.rate_limits.secondary || {};
-    const fhTag = p5h.used_percent < 50 ? '🟢' : p5h.used_percent < 80 ? '🟡' : '🔴';
-    const sdTag = p7d.used_percent < 50 ? '🟢' : p7d.used_percent < 80 ? '🟡' : '🔴';
-    const remH = (r) => { if (!r) return '?'; const ms = r*1000 - Date.now(); const h = Math.floor(ms/3600000); const m = Math.floor((ms%3600000)/60000); return ms<0?'?':`${h}h${m}m`; };
-    const remD = (r) => { if (!r) return '?'; const ms = r*1000 - Date.now(); const dd = Math.floor(ms/86400000); const h = Math.floor((ms%86400000)/3600000); return ms<0?'?':`${dd}d${h}h`; };
-    const ageMin = codex.rate_limits_age_seconds != null ? Math.floor(codex.rate_limits_age_seconds/60) : null;
-    const stale = ageMin != null && ageMin > 60 ? ` (数据 ${ageMin}m 前)` : '';
-    lines.unshift(`⚡ <b>Codex</b>${stale}: 5h 配额 ${fhTag} <b>${p5h.used_percent.toFixed(0)}%</b> (重置 ${remH(p5h.resets_at)}) · 7d 配额 ${sdTag} <b>${p7d.used_percent.toFixed(0)}%</b> (重置 ${remD(p7d.resets_at)})`);
+    const p5hPct = (p5h && p5h.used_percent != null) ? Number(p5h.used_percent) : null;
+    const p7dPct = (p7d && p7d.used_percent != null) ? Number(p7d.used_percent) : null;
+    // Only render this insight line if at least one window has data; otherwise it's noise.
+    if (p5hPct != null || p7dPct != null || codex.rate_limits.primary || codex.rate_limits.secondary) {
+      const fhTag = tagPct(p5hPct);
+      const sdTag = tagPct(p7dPct);
+      const remH = (r) => { if (!r) return '?'; const ms = r*1000 - Date.now(); const h = Math.floor(ms/3600000); const m = Math.floor((ms%3600000)/60000); return ms<0?'?':`${h}h${m}m`; };
+      const remD = (r) => { if (!r) return '?'; const ms = r*1000 - Date.now(); const dd = Math.floor(ms/86400000); const h = Math.floor((ms%86400000)/3600000); return ms<0?'?':`${dd}d${h}h`; };
+      const ageMin = codex.rate_limits_age_seconds != null ? Math.floor(codex.rate_limits_age_seconds/60) : null;
+      const stale = ageMin != null && ageMin > 60 ? ` (数据 ${ageMin}m 前)` : '';
+      lines.unshift(`⚡ <b>Codex</b>${stale}: 5h 配额 ${fhTag} <b>${fmtPct0(p5hPct)}</b> (重置 ${remH(p5h.resets_at)}) · 7d 配额 ${sdTag} <b>${fmtPct0(p7dPct)}</b> (重置 ${remD(p7d.resets_at)})`);
+    }
   }
 
   if (anthro.five_hour) {
     const fh = anthro.five_hour, sd = anthro.seven_day || {};
-    const fhTag = fh.utilization < 50 ? '🟢' : fh.utilization < 80 ? '🟡' : '🔴';
-    const sdTag = sd.utilization < 50 ? '🟢' : sd.utilization < 80 ? '🟡' : '🔴';
-    const fhRem = (() => { const ms = new Date(fh.resets_at) - new Date(); const h = Math.floor(ms/3600000); const m = Math.floor((ms%3600000)/60000); return ms < 0 ? '?' : `${h}h${m}m`; })();
-    const sdRem = (() => { const ms = new Date(sd.resets_at) - new Date(); const d = Math.floor(ms/86400000); const h = Math.floor((ms%86400000)/3600000); return ms < 0 ? '?' : `${d}d${h}h`; })();
-    lines.unshift(`⚡ <b>Anthropic 官方</b>: 5h 配额 ${fhTag} <b>${fh.utilization.toFixed(0)}%</b> (重置 ${fhRem}) · 7d 配额 ${sdTag} <b>${sd.utilization.toFixed(0)}%</b> (重置 ${sdRem})`);
+    const fhU = (fh && fh.utilization != null) ? Number(fh.utilization) : null;
+    const sdU = (sd && sd.utilization != null) ? Number(sd.utilization) : null;
+    const fhTag = tagPct(fhU);
+    const sdTag = tagPct(sdU);
+    const fhRem = (() => { if (!fh.resets_at) return '?'; const ms = new Date(fh.resets_at) - new Date(); const h = Math.floor(ms/3600000); const m = Math.floor((ms%3600000)/60000); return ms < 0 ? '?' : `${h}h${m}m`; })();
+    const sdRem = (() => { if (!sd.resets_at) return '?'; const ms = new Date(sd.resets_at) - new Date(); const d = Math.floor(ms/86400000); const h = Math.floor((ms%86400000)/3600000); return ms < 0 ? '?' : `${d}d${h}h`; })();
+    lines.unshift(`⚡ <b>Anthropic 官方</b>: 5h 配额 ${fhTag} <b>${fmtPct0(fhU)}</b> (重置 ${fhRem}) · 7d 配额 ${sdTag} <b>${fmtPct0(sdU)}</b> (重置 ${sdRem})`);
   }
 
   if (rs.saved && rs.raw_in) {
@@ -1147,22 +1163,24 @@ async function refresh() {
         return `<div class="bar-wrap" style="margin-top:6px;width:200px;display:inline-block;vertical-align:middle;"><div class="bar ${cls}" style="width:${u}%"></div></div>`;
       }
 
-      const fhCls = utilCls(fh.utilization);
-      const sdCls = utilCls(sd.utilization);
+      const fhU = (fh && fh.utilization != null) ? Number(fh.utilization) : null;
+      const sdU = (sd && sd.utilization != null) ? Number(sd.utilization) : null;
+      const fhCls = fhU == null ? '' : utilCls(fhU);
+      const sdCls = sdU == null ? '' : utilCls(sdU);
 
       let html = `
         <div style="margin-bottom:12px;">
           <div class="metric"><div class="label">5h 窗口已用</div>
-            <div class="value ${fhCls}">${fh.utilization.toFixed(1)}%</div>
-            ${bar(fh.utilization, fhCls)}
+            <div class="value ${fhCls}">${fmtPct1(fhU)}</div>
+            ${fhU == null ? '' : bar(fhU, fhCls)}
           </div>
           <div class="metric"><div class="label">5h 重置倒计时</div><div class="value">${timeRemaining(fh.resets_at)}</div>
             <div class="subtle" style="font-size:9px;">${fh.resets_at ? new Date(fh.resets_at).toLocaleString() : ''}</div></div>
         </div>
         <div>
           <div class="metric"><div class="label">7 天窗口已用</div>
-            <div class="value ${sdCls}">${sd.utilization.toFixed(1)}%</div>
-            ${bar(sd.utilization, sdCls)}
+            <div class="value ${sdCls}">${fmtPct1(sdU)}</div>
+            ${sdU == null ? '' : bar(sdU, sdCls)}
           </div>
           <div class="metric"><div class="label">7 天重置倒计时</div><div class="value">${timeRemaining(sd.resets_at)}</div>
             <div class="subtle" style="font-size:9px;">${sd.resets_at ? new Date(sd.resets_at).toLocaleString() : ''}</div></div>
@@ -1170,8 +1188,8 @@ async function refresh() {
 
       // Per-model 7d if present
       const subRows = [];
-      if (sonnet) subRows.push(`<span class="metric"><span class="label">Sonnet 7d</span> <b>${sonnet.utilization.toFixed(1)}%</b></span>`);
-      if (opus) subRows.push(`<span class="metric"><span class="label">Opus 7d</span> <b>${opus.utilization.toFixed(1)}%</b></span>`);
+      if (sonnet) subRows.push(`<span class="metric"><span class="label">Sonnet 7d</span> <b>${fmtPct1(sonnet.utilization)}</b></span>`);
+      if (opus) subRows.push(`<span class="metric"><span class="label">Opus 7d</span> <b>${fmtPct1(opus.utilization)}</b></span>`);
       if (extra && extra.is_enabled) {
         subRows.push(`<span class="metric"><span class="label">Extra usage</span> <b>${(extra.utilization || 0).toFixed(1)}% of ${extra.currency || 'USD'} ${extra.monthly_limit || '?'}</b></span>`);
       }
