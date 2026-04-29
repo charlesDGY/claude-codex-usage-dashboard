@@ -385,3 +385,14 @@ MIT (see `LICENSE`)
 - [`ccusage`](https://github.com/ryoppippi/ccusage) — Claude Code usage analyzer; this dashboard relies on it for Claude cost estimation.
 - [`rtk`](https://github.com/yusukebe/rtk) — local command proxy (optional data source).
 - The approach of reading session jsonl files directly comes from reverse-engineering Claude Code / Codex CLI's persistence strategy.
+---
+
+## Star History
+
+<a href="https://star-history.com/#charlesDGY/claude-codex-usage-dashboard&Date">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=charlesDGY/claude-codex-usage-dashboard&type=Date&theme=dark" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=charlesDGY/claude-codex-usage-dashboard&type=Date" />
+   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=charlesDGY/claude-codex-usage-dashboard&type=Date" />
+ </picture>
+</a>

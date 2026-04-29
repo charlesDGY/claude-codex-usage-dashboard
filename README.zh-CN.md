@@ -381,3 +381,14 @@ MIT (see `LICENSE`)
 - [`ccusage`](https://github.com/ryoppippi/ccusage) — Claude Code 用量分析工具，本 dashboard 的 Claude cost 估算靠它。
 - [`rtk`](https://github.com/yusukebe/rtk) — 本地命令代理（可选数据源）。
 - 直接读 jsonl session 文件的思路源自对 Claude Code / Codex CLI 数据持久化策略的逆向。
+---
+
+## Star 历史
+
+<a href="https://star-history.com/#charlesDGY/claude-codex-usage-dashboard&Date">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=charlesDGY/claude-codex-usage-dashboard&type=Date&theme=dark" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=charlesDGY/claude-codex-usage-dashboard&type=Date" />
+   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=charlesDGY/claude-codex-usage-dashboard&type=Date" />
+ </picture>
+</a>
