@@ -9,6 +9,9 @@ SCRIPT="$HERE/../cc_dashboard.py"
 LOG="${CC_DASHBOARD_LOG:-$HERE/../dashboard.log}"
 PIDFILE="${CC_DASHBOARD_PID:-$HERE/../dashboard.pid}"
 export CC_DASHBOARD_PORT="${CC_DASHBOARD_PORT:-36668}"
+if [[ -z "${CC_DASHBOARD_RTK_DB:-}" && -f "$HOME/E2E/.agflow/runtime/rtk/tracking.db" ]]; then
+    export CC_DASHBOARD_RTK_DB="$HOME/E2E/.agflow/runtime/rtk/tracking.db"
+fi
 PORT="$CC_DASHBOARD_PORT"
 
 is_running() {
@@ -20,7 +23,11 @@ cmd_start() {
         echo "already running pid=$(cat "$PIDFILE")"
         return 0
     fi
-    nohup "$PY" -u "$SCRIPT" > "$LOG" 2>&1 < /dev/null &
+    if command -v setsid >/dev/null 2>&1; then
+        setsid "$PY" -u "$SCRIPT" > "$LOG" 2>&1 < /dev/null &
+    else
+        nohup "$PY" -u "$SCRIPT" > "$LOG" 2>&1 < /dev/null &
+    fi
     echo "$!" > "$PIDFILE"
     disown 2>/dev/null || true
     sleep 2

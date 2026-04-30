@@ -35,7 +35,7 @@ CODEX_AUTO_PROBE_AGE_SECONDS = int(os.environ.get("CC_DASHBOARD_CODEX_PROBE_AGE_
 CODEX_PROBE_MIN_INTERVAL = int(os.environ.get("CC_DASHBOARD_CODEX_PROBE_MIN_INTERVAL_S", "300"))  # don't probe more often than 5min
 
 PROJECTS_DIR = Path.home() / ".claude" / "projects"
-RTK_DB = Path.home() / ".local" / "share" / "rtk" / "history.db"
+RTK_DB = Path(os.environ.get("CC_DASHBOARD_RTK_DB", str(Path.home() / ".local" / "share" / "rtk" / "history.db"))).expanduser()
 CREDS_FILE = Path.home() / ".claude" / ".credentials.json"
 ANTHROPIC_USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
 CODEX_SESSIONS_DIR = Path.home() / ".codex" / "sessions"
@@ -859,7 +859,7 @@ tr:hover { background: #1c2128; }
 <div class="grid">
   <div class="card"><h2>按工具拆分 (recent {{DAYS}}d)</h2>
     <table id="tool_table"><thead><tr>
-      <th>工具</th><th class="right">turns</th><th class="right">输出 (估)</th><th>占比</th>
+      <th>工具</th><th class="right">turns</th><th class="right">输出 (估)</th><th class="right">cache_read 归因</th><th>总占比</th>
     </tr></thead><tbody></tbody></table>
   </div>
   <div class="card"><h2>Subagent 类型 (recent {{DAYS}}d)</h2>
@@ -982,7 +982,9 @@ function renderInsights(d) {
     const [tn, tv] = tools[0];
     const totalTool = tools.reduce((s, [_,v]) => s + (v.total||0), 0);
     const tpct = totalTool > 0 ? (tv.total||0) / totalTool * 100 : 0;
-    lines.push(`🛠️ 工具 #1: <b>${tn}</b> 占 ${tpct.toFixed(0)}% 工具 token (${fmt(tv.total||0)})`);
+    const cachePart = (tv.total||0) > 0 ? (tv.cache_read||0) / (tv.total||0) * 100 : 0;
+    const cacheNote = cachePart > 80 ? `；其中 ${cachePart.toFixed(0)}% 是 cache_read 归因` : '';
+    lines.push(`🛠️ 工具 #1: <b>${tn}</b> 占 ${tpct.toFixed(0)}% 工具 token (${fmt(tv.total||0)})${cacheNote}`);
   }
 
   const subTypes = Object.entries(local.sub_types_count || {}).sort((a,b) => b[1] - a[1]);
@@ -1453,6 +1455,7 @@ async function refresh() {
         <td>${name}</td>
         <td class="right">${fmt(v.turns||0)}</td>
         <td class="right">${fmt(v.output||0)}</td>
+        <td class="right">${fmt(v.cache_read||0)}</td>
         <td>${bartrack(pct)}</td>
       </tr>`;
     }
