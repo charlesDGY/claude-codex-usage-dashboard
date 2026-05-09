@@ -32,7 +32,7 @@ WEEKLY_BUDGET_USD = float(os.environ.get("CC_DASHBOARD_WEEKLY_BUDGET_USD", "0"))
 # Codex active-probe: if data is older than this many seconds, run a minimal codex call to refresh.
 # 0 = disabled (button-only, no auto probe).
 CODEX_AUTO_PROBE_AGE_SECONDS = int(os.environ.get("CC_DASHBOARD_CODEX_PROBE_AGE_S", "0"))
-CODEX_PROBE_MIN_INTERVAL = int(os.environ.get("CC_DASHBOARD_CODEX_PROBE_MIN_INTERVAL_S", "300"))  # don't probe more often than 5min
+CODEX_PROBE_MIN_INTERVAL = int(os.environ.get("CC_DASHBOARD_CODEX_PROBE_MIN_INTERVAL_S", "60"))  # min 60s between probes
 
 PROJECTS_DIR = Path.home() / ".claude" / "projects"
 RTK_DB = Path(os.environ.get("CC_DASHBOARD_RTK_DB", str(Path.home() / ".local" / "share" / "rtk" / "history.db"))).expanduser()
@@ -50,9 +50,6 @@ _state = {
 }
 _state_lock = threading.Lock()
 _codex_probe_state = {"last_probe_ts": 0, "last_probe_status": None, "in_progress": False, "last_probe_reason": None}
-_codex_probe_lock = threading.Lock()
-CODEX_PROBE_MIN_INTERVAL = int(os.environ.get("CC_DASHBOARD_CODEX_PROBE_MIN_INTERVAL_S", "60"))  # min 60s between probes
-_codex_probe_state = {"last_probe_ts": 0, "last_probe_status": None, "in_progress": False}
 _codex_probe_lock = threading.Lock()
 
 
@@ -360,43 +357,6 @@ def fetch_anthropic_usage():
 
 
 def probe_codex(reason="manual"):
-    """Run a minimal codex exec to trigger a fresh rate_limits response.
-    
-    Codex returns rate_limits in every API response. By running one tiny exec
-    call, we get the latest snapshot written to a session jsonl, which scan_codex
-    will pick up on the next refresh.
-    
-    Keep cost minimal: 1-token prompt, mini model if supported, low effort.
-    Returns (ok, msg).
-    """
-    with _codex_probe_lock:
-        if _codex_probe_state["in_progress"]:
-            return False, "probe already in progress"
-        now = int(time.time())
-        last = _codex_probe_state["last_probe_ts"]
-        if now - last < CODEX_PROBE_MIN_INTERVAL:
-            return False, f"throttled (last probe {now - last}s ago, min interval {CODEX_PROBE_MIN_INTERVAL}s)"
-        _codex_probe_state["in_progress"] = True
-    
-    try:
-        cmd = ["codex", "exec", "--model", "gpt-5.5-mini", "-c", 'model_reasoning_effort="minimal"', "--skip-git-repo-check", "ok"]
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=45, cwd=str(Path.home() / ".cache" / "cc-dashboard"))
-        ok = proc.returncode == 0
-        with _codex_probe_lock:
-            _codex_probe_state["last_probe_ts"] = int(time.time())
-            _codex_probe_state["last_probe_status"] = "ok" if ok else f"rc={proc.returncode}: {(proc.stderr or '')[:120]}"
-            _codex_probe_state["last_probe_reason"] = reason
-            _codex_probe_state["in_progress"] = False
-        return ok, "probed" if ok else f"failed: {(proc.stderr or '')[:120]}"
-    except Exception as e:
-        with _codex_probe_lock:
-            _codex_probe_state["in_progress"] = False
-            _codex_probe_state["last_probe_status"] = f"exception: {e}"
-        return False, str(e)
-
-
-
-def probe_codex(reason="manual"):
     """Run a minimal codex exec to trigger a fresh rate_limits response in session jsonl.
     Cost: ~1 prompt token + reasoning_effort=minimal. Throttled to once per N seconds.
     """
@@ -417,6 +377,11 @@ def probe_codex(reason="manual"):
         proc = subprocess.run(cmd, input="ok\n", capture_output=True, text=True, timeout=60,
                               cwd=str(Path.home() / ".cache" / "cc-dashboard"))
         ok = proc.returncode == 0
+        if ok:
+            codex, _ = scan_codex()
+            if codex is not None:
+                with _state_lock:
+                    _state["codex"] = codex
         with _codex_probe_lock:
             _codex_probe_state["last_probe_ts"] = int(time.time())
             _codex_probe_state["last_probe_status"] = "ok" if ok else f"rc={proc.returncode}: {(proc.stderr or '')[:120]}"
@@ -480,21 +445,18 @@ def scan_codex():
                 + cached_t * p.get("cached_input", 0.5)
                 + (out_t + reasoning_t) * p.get("output", 20.0)) / 1_000_000.0
     
-    # Walk sessions newest-first; stop after we get the latest rate_limits
+    # Walk recent sessions newest-first by actual file mtime. Session directory names
+    # are creation-time based, but long-running sessions can keep receiving fresh
+    # token_count events days later.
     candidates = []
     try:
-        for ydir in sorted(CODEX_SESSIONS_DIR.iterdir(), reverse=True):
-            if not ydir.is_dir(): continue
-            for mdir in sorted(ydir.iterdir(), reverse=True):
-                if not mdir.is_dir(): continue
-                for ddir in sorted(mdir.iterdir(), reverse=True):
-                    if not ddir.is_dir(): continue
-                    for f in sorted(ddir.glob("rollout-*.jsonl"), key=lambda x: x.stat().st_mtime, reverse=True):
-                        candidates.append(f)
-                        if len(candidates) >= 30: break
-                    if len(candidates) >= 30: break
-                if len(candidates) >= 30: break
-            if len(candidates) >= 30: break
+        touched = []
+        for f in CODEX_SESSIONS_DIR.rglob("rollout-*.jsonl"):
+            try:
+                touched.append((f.stat().st_mtime, f))
+            except OSError:
+                continue
+        candidates = [f for _, f in sorted(touched, key=lambda x: x[0], reverse=True)[:100]]
     except OSError as e:
         return None, f"sessions walk error: {e}"
     
@@ -528,7 +490,10 @@ def scan_codex():
                         if ts > latest_rl_ts:
                             latest_rl = payload["rate_limits"]
                             latest_rl_ts = ts
-                            latest_rl_file = str(fpath.name)
+                            try:
+                                latest_rl_file = str(fpath.relative_to(CODEX_SESSIONS_DIR))
+                            except ValueError:
+                                latest_rl_file = str(fpath)
                             # Also capture last token_count info
                             if payload.get("info"):
                                 out["last_token_usage"] = payload["info"]
@@ -538,10 +503,6 @@ def scan_codex():
                     pass  # we'll get this from the latest file later
         except Exception:
             continue
-        if latest_rl is not None and latest_rl_ts > 0:
-            # Continue scanning a few more files to ensure we picked the *most recent* rate_limits
-            # but we sorted newest-first so first hit is usually authoritative.
-            break
     
     # Aggregate per-session token breakdown + cost from session jsonl
     # (Cheaper than rescanning all files: reuse `candidates` from the loop above + walk a few more)
@@ -764,7 +725,7 @@ tr:hover { background: #1c2128; }
 
 <div class="toolbar">
   <span><span class="dot" id="dot"></span><span id="status">初始化</span></span>
-  <span>·</span><span>auto-refresh 每 30s</span>
+  <span>·</span><span>前端 30s / 后端 {{REFRESH_SECONDS}}s</span>
   <span>·</span><span id="errs"></span>
 </div>
 
@@ -1053,25 +1014,6 @@ function renderInsights(d) {
 async function probeCodex() {
   const btn = document.getElementById('codex_probe_btn');
   const stat = document.getElementById('codex_probe_status');
-  if (!btn) return;
-  btn.disabled = true;
-  btn.style.opacity = '0.5';
-  stat.textContent = ' · 触发中... (约 30s)';
-  try {
-    const r = await fetch('/api/codex_probe', { method: 'POST' });
-    const d = await r.json();
-    stat.textContent = ' · ✓ 已触发，等下一次 dashboard refresh 显示新数据 (≤30s)';
-    setTimeout(() => { btn.disabled = false; btn.style.opacity = '1'; stat.textContent = ''; refresh(); }, 30000);
-  } catch (e) {
-    stat.textContent = ' · ✗ ' + e.message;
-    btn.disabled = false; btn.style.opacity = '1';
-  }
-}
-
-
-async function probeCodex() {
-  const btn = document.getElementById('codex_probe_btn');
-  const stat = document.getElementById('codex_probe_status');
   if (!btn || btn.disabled) return;
   btn.disabled = true; btn.style.opacity = '0.5';
   stat.textContent = '触发中…(约 30-60s)';
@@ -1084,13 +1026,14 @@ async function probeCodex() {
       setTimeout(() => stat.textContent = '', 5000);
       return;
     }
-    stat.textContent = '✓ 已触发，等 dashboard 下次 refresh (~30s)';
-    // Re-enable + auto-refresh after 30s so user sees new data
+    const waitMs = Math.max(30000, ((d.refresh_seconds || 60) + 5) * 1000);
+    stat.textContent = `✓ 已触发，等 probe 完成或下次 dashboard refresh (~${Math.round(waitMs / 1000)}s)`;
+    // Re-enable + auto-refresh after the next backend scan window so user sees new data.
     setTimeout(() => {
       btn.disabled = false; btn.style.opacity = '1';
       stat.textContent = '';
       refresh();
-    }, 30000);
+    }, waitMs);
   } catch (e) {
     stat.textContent = '✗ ' + e.message;
     btn.disabled = false; btn.style.opacity = '1';
@@ -1643,7 +1586,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path in ("/", "/index.html"):
-            html = HTML_PAGE.replace("{{DAYS}}", str(LOCAL_SCAN_DAYS))
+            html = HTML_PAGE.replace("{{DAYS}}", str(LOCAL_SCAN_DAYS)).replace("{{REFRESH_SECONDS}}", str(REFRESH_SECONDS))
             body = html.encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -1657,7 +1600,7 @@ class Handler(BaseHTTPRequestHandler):
                     "last_refresh_ts": _state["last_refresh_ts"],
                     "last_refresh_status": _state["last_refresh_status"],
                     "errors": _state["errors"],
-                    "host": HOST, "port": PORT, "refresh_seconds": REFRESH_SECONDS, "weekly_budget_usd": WEEKLY_BUDGET_USD, "codex_probe": dict(_codex_probe_state), "codex_probe": dict(_codex_probe_state), "codex_auto_probe_age_s": CODEX_AUTO_PROBE_AGE_SECONDS,
+                    "host": HOST, "port": PORT, "refresh_seconds": REFRESH_SECONDS, "weekly_budget_usd": WEEKLY_BUDGET_USD, "codex_probe": dict(_codex_probe_state), "codex_auto_probe_age_s": CODEX_AUTO_PROBE_AGE_SECONDS,
                 }
             body = json.dumps(payload, default=str).encode("utf-8")
             self.send_response(200)
@@ -1672,25 +1615,11 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         if self.path == "/api/codex_probe":
-            threading.Thread(target=probe_codex, args=("manual-button",), daemon=True).start()
-            with _codex_probe_lock:
-                state = dict(_codex_probe_state)
-            body = json.dumps({"triggered": True, "state": state}).encode()
-            self.send_response(202)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(body)))
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.end_headers(); self.wfile.write(body)
-        else:
-            self.send_response(404); self.end_headers()
-
-    def do_POST(self):
-        if self.path == "/api/codex_probe":
             # Trigger probe in background; return immediately with status
             threading.Thread(target=probe_codex, args=("manual-button",), daemon=True).start()
             with _codex_probe_lock:
                 state = dict(_codex_probe_state)
-            body = json.dumps({"triggered": True, "state": state}).encode()
+            body = json.dumps({"triggered": True, "state": state, "refresh_seconds": REFRESH_SECONDS}).encode()
             self.send_response(202)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))

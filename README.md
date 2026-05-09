@@ -117,6 +117,7 @@ ccdash tail       # Live tail the log
 | `CC_DASHBOARD_CCUSAGE_TIMEOUT` | `60` | Per-call timeout for ccusage (seconds) |
 | `CC_DASHBOARD_LOCAL_DAYS` | `14` | Days of local jsonl to scan |
 | `CC_DASHBOARD_WEEKLY_BUDGET_USD` | `0` (adaptive) | Weekly budget reference line (0 = max of last 4 weeks × 1.1) |
+| `CC_DASHBOARD_CODEX_PROBE_AGE_S` | `0` | Auto-run a minimal Codex probe when quota data is older than this many seconds (`0` = disabled) |
 | `CC_DASHBOARD_CODEX_PROBE_MIN_INTERVAL_S` | `60` | Throttle for the "🔄 Refresh now" button |
 | `CC_DASHBOARD_LOG` | `<repo>/dashboard.log` | Log file path |
 | `CC_DASHBOARD_PID` | `<repo>/dashboard.pid` | PID file path |
@@ -339,7 +340,8 @@ ls -la ~/.codex/sessions/*/*/*/rollout-*.jsonl 2>&1 | tail
 
 Normal — this data is only pushed by the server when `codex exec` is called.
 Click the **🔄 Refresh now** button on the dashboard to trigger a minimal codex
-call that pulls fresh data; the dashboard will reflect it within 30s.
+call that pulls fresh data; the dashboard will reflect it after the probe
+finishes or on the next backend refresh (about 60s by default).
 
 If you don't want to spend any quota on a probe, just wait — every routine codex
 call automatically refreshes the data.

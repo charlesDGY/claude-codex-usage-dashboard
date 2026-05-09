@@ -117,6 +117,7 @@ ccdash tail       # 实时 tail 日志
 | `CC_DASHBOARD_CCUSAGE_TIMEOUT` | `60` | ccusage 单次调用超时（秒） |
 | `CC_DASHBOARD_LOCAL_DAYS` | `14` | 本地 jsonl 扫描的回溯天数 |
 | `CC_DASHBOARD_WEEKLY_BUDGET_USD` | `0`(自适应) | 周 budget 显示参考线（0 = 取过去 4 周最高 × 1.1） |
+| `CC_DASHBOARD_CODEX_PROBE_AGE_S` | `0` | Codex 配额数据超过这个秒数后自动跑一次最小 probe（`0` = 关闭） |
 | `CC_DASHBOARD_CODEX_PROBE_MIN_INTERVAL_S` | `60` | "🔄 立即刷新"按钮的节流间隔 |
 | `CC_DASHBOARD_LOG` | `<repo>/dashboard.log` | 日志文件路径 |
 | `CC_DASHBOARD_PID` | `<repo>/dashboard.pid` | PID 文件路径 |
@@ -336,7 +337,7 @@ ls -la ~/.codex/sessions/*/*/*/rollout-*.jsonl 2>&1 | tail
 
 正常 — 这些数据只在 `codex exec` 调用后由服务端推送来。
 点 dashboard 上的 **🔄 立即刷新** 按钮，会触发一次最小 codex 调用拉新数据，
-30s 内 dashboard 自动反映。
+probe 完成后或下一次后端刷新时 dashboard 会自动反映（默认约 60s）。
 
 如果你不想花配额做 probe，等系统下次自然跑 codex 即可（每次 codex 调用都会刷新）。
 
