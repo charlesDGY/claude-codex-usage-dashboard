@@ -475,11 +475,12 @@ def scan_codex():
     except OSError as e:
         return None, f"sessions walk error: {e}"
     
-    # Find latest rate_limits across the recent files
+    # Find latest rate_limits, tracked PER limit_id (see selection note below).
     latest_rl = None
     latest_rl_ts = 0
     latest_rl_file = None
-    latest_session_meta = None
+    rl_by_limit = {}            # limit_id -> {"ts","rl","file"}
+    _global_info_ts = 0         # for out["last_token_usage"] (global-latest token_count)
     
     for fpath in candidates:
         try:
@@ -502,22 +503,43 @@ def scan_codex():
                             ts = int(_dt.fromisoformat(ts_iso).timestamp())
                         except Exception:
                             ts = 0
-                        if ts > latest_rl_ts:
-                            latest_rl = payload["rate_limits"]
-                            latest_rl_ts = ts
-                            try:
-                                latest_rl_file = str(fpath.relative_to(CODEX_SESSIONS_DIR))
-                            except ValueError:
-                                latest_rl_file = str(fpath)
-                            # Also capture last token_count info
-                            if payload.get("info"):
-                                out["last_token_usage"] = payload["info"]
+                        rl = payload["rate_limits"]
+                        try:
+                            src = str(fpath.relative_to(CODEX_SESSIONS_DIR))
+                        except ValueError:
+                            src = str(fpath)
+                        # Keep the latest reading per limit_id (a session always
+                        # reports one limit_id; aggregate the freshest per bucket).
+                        lid = rl.get("limit_id") or "?"
+                        prev = rl_by_limit.get(lid)
+                        if prev is None or ts > prev["ts"]:
+                            rl_by_limit[lid] = {"ts": ts, "rl": rl, "file": src}
+                        # last_token_usage tracks the globally-latest token_count
+                        if ts > _global_info_ts and payload.get("info"):
+                            _global_info_ts = ts
+                            out["last_token_usage"] = payload["info"]
                         break  # don't walk further back in this file
-                # Also capture session meta from first record for plan/account info
-                if obj.get("type") == "session_meta" and not latest_session_meta:
-                    pass  # we'll get this from the latest file later
         except Exception:
             continue
+
+    # Pick the BINDING limit bucket: the highest current usage (max of primary /
+    # secondary used_percent) among the latest-per-limit_id readings, ties broken
+    # by recency. A long-running session can keep emitting an always-zero
+    # promotional bucket (e.g. limit_id 'codex_bengalfox' / GPT-5.x-Codex-Spark)
+    # which, being continuously active, otherwise owns the globally-latest
+    # token_count and masks the real plan limit ('codex'). This rule ignores
+    # always-zero buckets without hardcoding any limit_id, and still reports 0
+    # correctly when usage is genuinely 0.
+    def _max_used_pct(rl):
+        pr = (rl.get("primary") or {}).get("used_percent") or 0.0
+        se = (rl.get("secondary") or {}).get("used_percent") or 0.0
+        return max(pr, se)
+
+    if rl_by_limit:
+        chosen = max(rl_by_limit.values(), key=lambda e: (_max_used_pct(e["rl"]), e["ts"]))
+        latest_rl = chosen["rl"]
+        latest_rl_ts = chosen["ts"]
+        latest_rl_file = chosen["file"]
     
     # Aggregate per-session token breakdown + cost from session jsonl
     # (Cheaper than rescanning all files: reuse `candidates` from the loop above + walk a few more)
