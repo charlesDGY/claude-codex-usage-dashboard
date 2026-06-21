@@ -66,6 +66,21 @@ def run_ccusage(args):
         return None, str(e)
 
 
+def _iter_jsonl_files(root):
+    """Yield ``*.jsonl`` Paths under *root*, tolerant of dirs vanishing mid-walk.
+
+    Claude session dirs under ``~/.claude/projects/`` are reclaimed at runtime.
+    A plain ``Path.rglob()`` raises ``FileNotFoundError`` if a directory
+    disappears between enumeration and descent, which previously propagated out
+    of ``scan_local`` and killed the refresh thread (auto-update silently
+    stopped). ``os.walk`` with an ``onerror`` callback skips such dirs instead.
+    """
+    for dirpath, _dirnames, filenames in os.walk(root, onerror=lambda _e: None):
+        for name in filenames:
+            if name.endswith(".jsonl"):
+                yield Path(dirpath) / name
+
+
 def scan_local():
     """Walk ~/.claude/projects/**/*.jsonl and aggregate fine-grained metrics."""
     if not PROJECTS_DIR.is_dir():
@@ -93,7 +108,7 @@ def scan_local():
     files_skipped_old = 0
     msg_total = 0
 
-    for jsonl in PROJECTS_DIR.rglob("*.jsonl"):
+    for jsonl in _iter_jsonl_files(PROJECTS_DIR):
         try:
             mtime = jsonl.stat().st_mtime
         except OSError:
@@ -645,41 +660,53 @@ def scan_codex():
 
 def refresh_loop():
     while True:
-        errs = []
-        daily, err = run_ccusage(["daily"])
-        if err: errs.append(f"daily: {err}")
-        blocks, err = run_ccusage(["blocks", "--active"])
-        if err: errs.append(f"blocks: {err}")
-        session, err = run_ccusage(["session", "--order", "desc"])
-        if err: errs.append(f"session: {err}")
-        weekly, err = run_ccusage(["weekly"])
-        if err: errs.append(f"weekly: {err}")
-        local, err = scan_local()
-        if err: errs.append(f"local: {err}")
-        rtk, err = scan_rtk()
-        if err: errs.append(f"rtk: {err}")
-        anthro, err = fetch_anthropic_usage()
-        if err: errs.append(f"anthropic: {err}")
-        codex, err = scan_codex()
-        if err: errs.append(f"codex: {err}")
-        # Auto-probe if enabled + data stale + min-interval respected
-        if CODEX_AUTO_PROBE_AGE_SECONDS > 0 and codex:
-            age = codex.get("rate_limits_age_seconds")
-            if age is None or age > CODEX_AUTO_PROBE_AGE_SECONDS:
-                threading.Thread(target=probe_codex, args=("auto-stale",), daemon=True).start()
+        try:
+            errs = []
+            daily, err = run_ccusage(["daily"])
+            if err: errs.append(f"daily: {err}")
+            blocks, err = run_ccusage(["blocks", "--active"])
+            if err: errs.append(f"blocks: {err}")
+            session, err = run_ccusage(["session", "--order", "desc"])
+            if err: errs.append(f"session: {err}")
+            weekly, err = run_ccusage(["weekly"])
+            if err: errs.append(f"weekly: {err}")
+            local, err = scan_local()
+            if err: errs.append(f"local: {err}")
+            rtk, err = scan_rtk()
+            if err: errs.append(f"rtk: {err}")
+            anthro, err = fetch_anthropic_usage()
+            if err: errs.append(f"anthropic: {err}")
+            codex, err = scan_codex()
+            if err: errs.append(f"codex: {err}")
+            # Auto-probe if enabled + data stale + min-interval respected
+            if CODEX_AUTO_PROBE_AGE_SECONDS > 0 and codex:
+                age = codex.get("rate_limits_age_seconds")
+                if age is None or age > CODEX_AUTO_PROBE_AGE_SECONDS:
+                    threading.Thread(target=probe_codex, args=("auto-stale",), daemon=True).start()
 
-        with _state_lock:
-            if daily is not None: _state["daily"] = daily
-            if blocks is not None: _state["blocks"] = blocks
-            if session is not None: _state["session"] = session
-            if weekly is not None: _state["weekly"] = weekly
-            if local is not None: _state["local"] = local
-            if rtk is not None: _state["rtk"] = rtk
-            if anthro is not None: _state["anthropic"] = anthro
-            if codex is not None: _state["codex"] = codex
-            _state["last_refresh_ts"] = int(time.time())
-            _state["last_refresh_status"] = "ok" if not errs else "partial"
-            _state["errors"] = errs
+            with _state_lock:
+                if daily is not None: _state["daily"] = daily
+                if blocks is not None: _state["blocks"] = blocks
+                if session is not None: _state["session"] = session
+                if weekly is not None: _state["weekly"] = weekly
+                if local is not None: _state["local"] = local
+                if rtk is not None: _state["rtk"] = rtk
+                if anthro is not None: _state["anthropic"] = anthro
+                if codex is not None: _state["codex"] = codex
+                _state["last_refresh_ts"] = int(time.time())
+                _state["last_refresh_status"] = "ok" if not errs else "partial"
+                _state["errors"] = errs
+        except Exception as e:
+            # Never let an unexpected error kill the refresh thread — the whole
+            # point of the dashboard is auto-updating. Log and retry next cycle.
+            import traceback as _tb
+            _tb.print_exc()
+            try:
+                with _state_lock:
+                    _state["last_refresh_status"] = "error"
+                    _state["errors"] = [f"refresh_loop: {e!r}"]
+            except Exception:
+                pass
         time.sleep(REFRESH_SECONDS)
 
 
